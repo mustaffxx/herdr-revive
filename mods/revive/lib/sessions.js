@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { validId } from "./core.js";
 
 /** A folder as Claude Code and Droid name its store: every non-alphanumeric a dash. */
@@ -18,7 +18,8 @@ const dashed = (cwd) => cwd.replace(/[^A-Za-z0-9]/g, "-");
 
 /** Where each agent keeps its files, from the environment. */
 export function agentDirs(env = process.env) {
-  const home = env.HOME || "";
+  // Windows keeps the home folder in USERPROFILE; a HOME there (Git Bash's) may be a POSIX-style path.
+  const home = (process.platform === "win32" ? env.USERPROFILE || env.HOME : env.HOME) || "";
   return {
     claude: env.CLAUDE_CONFIG_DIR || join(home, ".claude"),
     factory: join(home, ".factory"),
@@ -143,7 +144,7 @@ export function claudeStartFolder({ dirs = agentDirs(), session, cwd = null } = 
   if (!dir) return { why: "it has no message yet, so there is nothing to resume" };
   const start = firstCwd(join(dir, file));
   // A folder filed under another name isn't one `--resume` would look in.
-  if (!start?.startsWith("/") || join(projects, dashed(start)) !== dir) {
+  if (!start || !isAbsolute(start) || join(projects, dashed(start)) !== dir) {
     return { why: "its transcript doesn't say which folder it started in" };
   }
   return { cwd: start };

@@ -8,6 +8,7 @@ import {
   AGENTS, agentKey, needsOf, carriedFlags, isOneShot, validId, command, shQuote, shJoin, readRecord, labelArgs, clearArgs,
   stateOf, shouldResume, ownShell, isShell, promptShell, idleWrappedShell, resumeScript, attendedFlags, ago, printfLine,
 } from "../mods/revive/lib/core.js";
+import { POSIX_HARNESS } from "./helpers/platform.js";
 
 /** What a terminal shows: the text without its colors. */
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -124,7 +125,7 @@ test("resume and fork commands per agent", () => {
   assert.equal(command(null), null);
 });
 
-test("shell quoting survives the shell", () => {
+test("shell quoting survives the shell", POSIX_HARNESS, () => {
   const words = ["plain", "with space", "it's", "$HOME", "`id`", "a\"b", "", "--model=opus"];
   const out = execFileSync("sh", ["-c", `printf '%s\\n' ${shJoin(words)}`], { encoding: "utf8" });
   assert.deepEqual(out.split("\n").slice(0, -1), words);
@@ -229,7 +230,7 @@ test("a session keeps its agent's config folder, and only that", () => {
   assert.deepEqual(command(readRecord(labels({ agent: "claude", session: ID }))), ["claude", "--resume", ID], "no variables, no env");
 });
 
-test("the resume script runs the agent in its folder and reports a quick failure", () => {
+test("the resume script runs the agent in its folder and reports a quick failure", POSIX_HARNESS, () => {
   const dir = mkdtempSync(join(tmpdir(), "revive-"));
   const work = join(dir, "it's here");
   execFileSync("mkdir", ["-p", work]);
@@ -252,7 +253,7 @@ test("the resume script runs the agent in its folder and reports a quick failure
   assert.equal(resumeScript({ agent: "claude", session: "x;y" }, "/x"), "");
 });
 
-test("the agent is handed the terminal, even when the shell's output is held", () => {
+test("the agent is handed the terminal, even when the shell's output is held", POSIX_HARNESS, () => {
   const dir = mkdtempSync(join(tmpdir(), "revive-"));
   // The agent reports whether its stdout is the terminal device it was given.
   writeFileSync(join(dir, "claude"), `#!/bin/sh\necho "agent ran"\nexit 0\n`);
@@ -369,7 +370,7 @@ test("shells are recognized by name, login or not", () => {
   for (const argv of [["script"], ["node", "x"], ["claude"], [], undefined]) assert.equal(isShell(argv), false, String(argv?.[0]));
 });
 
-test("the shell's notes use ANSI's own colors, and their text never reaches the format", () => {
+test("the shell's notes use ANSI's own colors, and their text never reaches the format", POSIX_HARNESS, () => {
   const line = printfLine([["accent", "↻ Revive"], [null, " 100% done, it's fine"], ["dim", " hint"]]);
   // The texts are arguments: a % or a quote in them prints as it is.
   assert.match(line, /^printf '\\033\[1;34m%s\\033\[0m%s\\033\[2m%s\\033\[0m\\n' /);

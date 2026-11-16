@@ -25,6 +25,16 @@ const checking = () => {
 };
 
 /**
+ * Whether the app runs on Windows, where herdr-core starts PowerShell: a
+ * command shown to copy is written in its syntax there. Read from the module
+ * like `checking`, so a Herdr without `window()` still loads the mod.
+ */
+const onWindows = () => {
+  try { return typeof herdr.window === "function" && herdr.window()?.platform === "windows"; }
+  catch { return false; }
+};
+
+/**
  * Why a running session can't be forked from here, or null. A fork opens a new
  * terminal with the app's environment and the recorded folder: a session that
  * needs a variable or flag Revive doesn't carry, or whose folder failed the
@@ -65,7 +75,7 @@ function listMaxH(extra) {
 function tilde(path) {
   const h = home();
   if (!path || !h) return path;
-  return path === h ? "~" : path.startsWith(h + "/") ? "~" + path.slice(h.length) : path;
+  return path === h ? "~" : path.startsWith(h + "/") || path.startsWith(h + "\\") ? "~" + path.slice(h.length) : path;
 }
 
 /** A theme color with an alpha (two hex digits), as Herdr's own mods do; any other format is left alone. */
@@ -417,7 +427,7 @@ export default class Revive extends View {
     const empty = running && (entry.forkable === false || Boolean(blocked));
     // Resume by hand that the engine would refuse: why, and what to run instead.
     const stuck = NEEDS_YOU.has(state) ? unresumable(rec) : null;
-    const byHand = stuck?.needs ? needsCommand(rec) : null;
+    const byHand = stuck?.needs ? needsCommand(rec, { dialect: onWindows() ? "pwsh" : "posix" }) : null;
     // Started before Revive was installed, and a Claude Code session (the
     // engine says): Remember records it. No message yet: nothing to remember.
     const remembers = Boolean(entry.unrecorded) && entry.rememberable != null;

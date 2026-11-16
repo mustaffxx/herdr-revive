@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, symlinkSync, lstatSync, statSync, realpathSync, copyFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { withHooks, hasHooks, withShellBlock, shellBlock, withCursorHooks, hasCursorHooks, engineWord } from "../mods/revive/revive.mjs";
+import { POSIX_HARNESS } from "./helpers/platform.js";
 
 const ENGINE = resolve("mods/revive/revive.mjs");
 const theirs = { type: "command", command: "~/bin/notify.sh" };
@@ -83,19 +84,19 @@ for (const sh of ["sh", "bash", "zsh"]) {
   });
 }
 
-test("outside herdr the block does nothing", () => {
+test("outside herdr the block does nothing", POSIX_HARNESS, () => {
   const out = execFileSync("sh", ["-c", `${shellBlock(ENGINE)}\necho ok`], { encoding: "utf8", env: { ...process.env, HC_TERMINAL_ID: "" } });
   assert.equal(out, "ok\n");
 });
 
-test("install and uninstall touch only what they own, with backups", () => {
+test("install and uninstall touch only what they own, with backups", POSIX_HARNESS, () => {
   const home = mkdtempSync(join(tmpdir(), "revive-home-"));
   mkdirSync(join(home, ".claude"));
   mkdirSync(join(home, ".codex"));
   const settings = join(home, ".claude", "settings.json");
   writeFileSync(settings, JSON.stringify({ theme: "dark", hooks: { Stop: [{ hooks: [theirs] }] } }));
   writeFileSync(join(home, ".zshrc"), "alias g=git\n");
-  const env = { ...process.env, HOME: home, SHELL: "/bin/zsh", CLAUDE_CONFIG_DIR: "", CODEX_HOME: "", ZDOTDIR: "" };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, SHELL: "/bin/zsh", CLAUDE_CONFIG_DIR: "", CODEX_HOME: "", ZDOTDIR: "" };
   delete env.CLAUDE_CONFIG_DIR; delete env.CODEX_HOME; delete env.ZDOTDIR;
   const run = (...args) => execFileSync("node", [ENGINE, ...args], { encoding: "utf8", env });
 
@@ -133,7 +134,7 @@ test("install and uninstall touch only what they own, with backups", () => {
 // macOS unless a test says otherwise: where bash's block goes depends on it.
 const bareHome = (platform = "darwin") => {
   const home = mkdtempSync(join(tmpdir(), "revive-home-"));
-  const env = { ...process.env, HOME: home, SHELL: "/bin/bash", REVIVE_PLATFORM: platform };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, SHELL: "/bin/bash", REVIVE_PLATFORM: platform };
   delete env.CLAUDE_CONFIG_DIR; delete env.CODEX_HOME; delete env.ZDOTDIR;
   return { home, run: (...args) => execFileSync("node", [ENGINE, ...args], { encoding: "utf8", env }) };
 };
@@ -152,7 +153,7 @@ test("without Claude Code, install leaves ~/.claude alone and doctor doesn't ask
   assert.equal(JSON.parse(run("doctor")).claude, null);
 });
 
-test("bash gets the block in the file a login shell reads (macOS)", () => {
+test("bash gets the block in the file a login shell reads (macOS)", POSIX_HARNESS, () => {
   const only = bareHome();
   writeFileSync(join(only.home, ".profile"), "export A=1\n");
   only.run("install", "--bash", "--no-codex");
@@ -168,7 +169,7 @@ test("bash gets the block in the file a login shell reads (macOS)", () => {
   assert.ok(!readFileSync(join(none.home, ".bash_profile"), "utf8").includes("herdr-revive"));
 });
 
-test("on Linux bash gets the block in .bashrc: herdr-core starts bash without -l", () => {
+test("on Linux bash gets the block in .bashrc: herdr-core starts bash without -l", POSIX_HARNESS, () => {
   const linux = bareHome("linux");
   writeFileSync(join(linux.home, ".profile"), "export A=1\n");
   writeFileSync(join(linux.home, ".bashrc"), "case $- in *i*) ;; *) return;; esac\nPATH=$HOME/bin:$PATH\n");
@@ -183,7 +184,7 @@ test("on Linux bash gets the block in .bashrc: herdr-core starts bash without -l
   assert.ok(!readFileSync(join(linux.home, ".bashrc"), "utf8").includes("herdr-revive"));
 });
 
-test("on Linux an older block in a bash login file moves to .bashrc", () => {
+test("on Linux an older block in a bash login file moves to .bashrc", POSIX_HARNESS, () => {
   const linux = bareHome("linux");
   // What 0.4.0 left: the block in the login file.
   writeFileSync(join(linux.home, ".profile"), `export A=1\n${shellBlock(ENGINE)}\n`);
@@ -193,20 +194,20 @@ test("on Linux an older block in a bash login file moves to .bashrc", () => {
   assert.match(out, /\.profile/);
 });
 
-test("Claude Code's hook names the engine under $HOME, so a copied settings file works on another machine", () => {
-  assert.equal(engineWord("/home/me/.config/herdr-app/mods/revive/revive.mjs", "/home/me"), '"$HOME/.config/herdr-app/mods/revive/revive.mjs"');
-  assert.equal(engineWord("/Users/me/my mods/revive.mjs", "/Users/me"), '"$HOME/my mods/revive.mjs"');
+test("Claude Code's hook names the engine under $HOME, so a copied settings file works on another machine", POSIX_HARNESS, () => {
+  assert.equal(engineWord("/home/me/.config/herdr-app/mods/revive/revive.mjs", "/home/me", false), '"$HOME/.config/herdr-app/mods/revive/revive.mjs"');
+  assert.equal(engineWord("/Users/me/my mods/revive.mjs", "/Users/me", false), '"$HOME/my mods/revive.mjs"');
   // Outside home, or with characters a double-quoted word would expand, it is the quoted path.
-  assert.equal(engineWord("/opt/revive/revive.mjs", "/home/me"), "/opt/revive/revive.mjs");
-  assert.equal(engineWord("/home/me/$x/revive.mjs", "/home/me"), "'/home/me/$x/revive.mjs'");
-  assert.equal(engineWord("/home/mex/revive.mjs", "/home/me"), "/home/mex/revive.mjs");
+  assert.equal(engineWord("/opt/revive/revive.mjs", "/home/me", false), "/opt/revive/revive.mjs");
+  assert.equal(engineWord("/home/me/$x/revive.mjs", "/home/me", false), "'/home/me/$x/revive.mjs'");
+  assert.equal(engineWord("/home/mex/revive.mjs", "/home/me", false), "/home/mex/revive.mjs");
   // The command a shell runs from it is the engine itself.
   const word = engineWord(ENGINE, resolve(".."));
   const out = execFileSync("sh", ["-c", `printf %s ${word}`], { encoding: "utf8", env: { ...process.env, HOME: resolve("..") } });
   assert.equal(out, ENGINE);
 });
 
-test("REVIVE_DEBUG=1 says why a shell didn't resume", () => {
+test("REVIVE_DEBUG=1 says why a shell didn't resume", POSIX_HARNESS, () => {
   const bin = mkdtempSync(join(tmpdir(), "revive-bin-"));
   writeFileSync(join(bin, "hc"), "#!/bin/sh\necho '{\"labels\":{}}'\n");
   chmodSync(join(bin, "hc"), 0o755);
@@ -235,7 +236,7 @@ function fakeTools(pid) {
   return { env, started: () => existsSync(join(bin, "node.log")) };
 }
 
-test("the shell block honors REVIVE_HC and doesn't start node in a shell started from one that ran it", () => {
+test("the shell block honors REVIVE_HC and doesn't start node in a shell started from one that ran it", POSIX_HARNESS, () => {
   // `hc` is not on PATH here: only REVIVE_HC can answer.
   const own = fakeTools("SELF");
   // The test's shell tells the fake hc its pid, which is what the real one reports.
@@ -254,14 +255,14 @@ test("the shell block honors REVIVE_HC and doesn't start node in a shell started
   assert.match(out, /a shell started inside the terminal's own shell/);
 });
 
-test("the shell block exports its pid for the shells started from it", () => {
+test("the shell block exports its pid for the shells started from it", POSIX_HARNESS, () => {
   const { env } = fakeTools(1);
   const out = execFileSync("sh", ["-c", `${shellBlock(ENGINE)}\nprintf '%s %s' "$REVIVE_SHELL" $$`], { env, encoding: "utf8" });
   const [marker, pid] = out.split(" ");
   assert.equal(marker, pid);
 });
 
-test("install writes through a symlinked file and keeps its permissions", () => {
+test("install writes through a symlinked file and keeps its permissions", POSIX_HARNESS, () => {
   const home = mkdtempSync(join(tmpdir(), "revive-home-"));
   const repo = join(home, "dotfiles");
   mkdirSync(repo);
@@ -271,7 +272,7 @@ test("install writes through a symlinked file and keeps its permissions", () => 
   symlinkSync(join(repo, "zshrc"), join(home, ".zshrc"));
   writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
   chmodSync(join(home, ".claude", "settings.json"), 0o600);
-  const env = { ...process.env, HOME: home, SHELL: "/bin/zsh", ZDOTDIR: home };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, SHELL: "/bin/zsh", ZDOTDIR: home };
   delete env.CLAUDE_CONFIG_DIR; delete env.CODEX_HOME;
   execFileSync("node", [ENGINE, "install", "--no-codex"], { env });
 
@@ -287,7 +288,7 @@ test("zsh's rc file is found through ZDOTDIR set in .zshenv", (t) => {
   const home = mkdtempSync(join(tmpdir(), "revive-home-"));
   mkdirSync(join(home, ".config", "zsh"), { recursive: true });
   writeFileSync(join(home, ".zshenv"), 'export ZDOTDIR="$HOME/.config/zsh"\n');
-  const env = { ...process.env, HOME: home, SHELL: "/bin/zsh" };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, SHELL: "/bin/zsh" };
   delete env.ZDOTDIR; delete env.CLAUDE_CONFIG_DIR; delete env.CODEX_HOME;
   execFileSync("node", [ENGINE, "install", "--no-codex"], { env });
   assert.ok(readFileSync(join(home, ".config", "zsh", ".zshrc"), "utf8").includes("herdr-revive"));
@@ -295,11 +296,11 @@ test("zsh's rc file is found through ZDOTDIR set in .zshenv", (t) => {
   assert.equal(JSON.parse(execFileSync("node", [ENGINE, "doctor"], { env, encoding: "utf8" })).shell.zsh, true);
 });
 
-test("a settings file that isn't JSON is left alone", () => {
+test("a settings file that isn't JSON is left alone", POSIX_HARNESS, () => {
   const home = mkdtempSync(join(tmpdir(), "revive-home-"));
   mkdirSync(join(home, ".claude"));
   writeFileSync(join(home, ".claude", "settings.json"), "{ not json");
-  const env = { ...process.env, HOME: home, SHELL: "/bin/zsh" };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, SHELL: "/bin/zsh" };
   delete env.CLAUDE_CONFIG_DIR; delete env.ZDOTDIR;
   const out = execFileSync("node", [ENGINE, "install", "--no-shell"], { env, encoding: "utf8" });
   assert.match(out, /Skipped Claude Code: ~\/\.claude\/settings\.json is not valid JSON/);
@@ -313,7 +314,7 @@ test("hooks without a herdr terminal do nothing and never fail", () => {
   execFileSync("node", [ENGINE, "hook"], { input: "garbage", env: { ...env, HC_TERMINAL_ID: "t999", REVIVE_HC: "/nonexistent/hc" } });
 });
 
-test("pi's extension is linked where pi loads it, and only that link is taken out", () => {
+test("pi's extension is linked where pi loads it, and only that link is taken out", POSIX_HARNESS, () => {
   const { home, run } = bareHome();
   const link = join(home, ".pi", "agent", "extensions", "herdr-revive.ts");
   assert.equal(JSON.parse(run("doctor")).pi, null, "no pi, nothing to say");
@@ -327,7 +328,7 @@ test("pi's extension is linked where pi loads it, and only that link is taken ou
   assert.equal(JSON.parse(run("doctor")).pi, false);
 });
 
-test("omp's extension is linked into ~/.omp/agent/extensions, and only that link is taken out", () => {
+test("omp's extension is linked into ~/.omp/agent/extensions, and only that link is taken out", POSIX_HARNESS, () => {
   const { home, run } = bareHome();
   const link = join(home, ".omp", "agent", "extensions", "herdr-revive.ts");
   assert.equal(JSON.parse(run("doctor")).omp, null, "no omp, nothing to say");
@@ -345,7 +346,7 @@ test("omp's extension is linked into ~/.omp/agent/extensions, and only that link
   assert.ok(!existsSync(link));
 });
 
-test("a pi extension placed by something else is left alone", () => {
+test("a pi extension placed by something else is left alone", POSIX_HARNESS, () => {
   const { home, run } = bareHome();
   const dir = join(home, ".pi", "agent", "extensions");
   mkdirSync(dir, { recursive: true });
@@ -362,7 +363,7 @@ test("a pi extension placed by something else is left alone", () => {
   const other = bareHome();
   mkdirSync(join(other.home, ".pi", "agent", "extensions"), { recursive: true });
   writeFileSync(join(other.home, ".pi", "agent", "extensions", "herdr-revive.ts"), "export default () => {};\n");
-  const r = spawnSync("node", [ENGINE, "install", "--bash", "--no-codex"], { encoding: "utf8", env: { ...process.env, HOME: other.home, SHELL: "/bin/bash", CLAUDE_CONFIG_DIR: "", CODEX_HOME: "", ZDOTDIR: "", REVIVE_PLATFORM: "darwin" } });
+  const r = spawnSync("node", [ENGINE, "install", "--bash", "--no-codex"], { encoding: "utf8", env: { ...process.env, HOME: other.home, USERPROFILE: other.home, SHELL: "/bin/bash", CLAUDE_CONFIG_DIR: "", CODEX_HOME: "", ZDOTDIR: "", REVIVE_PLATFORM: "darwin" } });
   assert.equal(r.status, 0);
   assert.match(r.stderr, /not Revive's pi extension/);
   assert.ok(readFileSync(join(other.home, ".bash_profile"), "utf8").includes("herdr-revive"), "the rest is still installed");
@@ -390,7 +391,7 @@ const agentsHome = ({ factory = true, cursor = true, droid = factory, cursorAgen
   if (cursor) mkdirSync(join(home, ".cursor"));
   if (droid) fakeCli(bin, "droid");
   if (cursorAgent) fakeCli(bin, "cursor-agent");
-  const env = { ...process.env, HOME: home, SHELL: "/bin/zsh", ZDOTDIR: home, PATH: `${bin}:/usr/bin:/bin` };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, SHELL: "/bin/zsh", ZDOTDIR: home, PATH: [bin, "/usr/bin", "/bin"].join(delimiter) };
   delete env.CLAUDE_CONFIG_DIR; delete env.CODEX_HOME;
   const run = (...args) => execFileSync(process.execPath, [ENGINE, ...args], { encoding: "utf8", env });
   const json = (...p) => JSON.parse(readFileSync(join(home, ...p), "utf8"));
@@ -534,7 +535,7 @@ test("uninstall still cleans an agent whose CLI is gone", () => {
   assert.deepEqual(json(".cursor", "hooks.json"), { version: 1 });
 });
 
-test("an agent file that isn't valid JSON skips that agent only", () => {
+test("an agent file that isn't valid JSON skips that agent only", POSIX_HARNESS, () => {
   const { home, run, json } = agentsHome();
   const settings = join(home, ".factory", "settings.json");
   const broken = '{ // half-edited\n  "model": "x",\n';

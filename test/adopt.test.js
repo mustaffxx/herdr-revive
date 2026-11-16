@@ -11,6 +11,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodS
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readRecord, resumeLine } from "../mods/revive/lib/core.js";
+import { POSIX_HARNESS, WINDOWS } from "./helpers/platform.js";
 
 const ENGINE = resolve("mods/revive/revive.mjs");
 const A = "0c8b28eb-1111-4222-8333-444455556666";
@@ -21,7 +22,7 @@ const dashed = (p) => p.replace(/[^A-Za-z0-9]/g, "-");
 const re = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // The terminals' program: a real process, so `ps` gives its start time.
 const SHELL = process.pid;
-const since = execFileSync("ps", ["-o", "lstart=", "-p", String(SHELL)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } }).trim().split(/\s+/).join(" ");
+const since = WINDOWS ? "" : execFileSync("ps", ["-o", "lstart=", "-p", String(SHELL)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } }).trim().split(/\s+/).join(" ");
 
 const base = { ...process.env };
 for (const k of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "HC_TERMINAL_ID", "HC_TERMINAL_SOCKET", "REVIVE_SHELL", "ZDOTDIR"]) delete base[k];
@@ -70,14 +71,14 @@ else if (cmd === "label") {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${id}.jsonl`), [{ type: "mode", sessionId: id }, { type: "attachment", cwd }].map((l) => JSON.stringify(l)).join("\n") + "\n");
   };
-  const env = (extra = {}) => ({ ...base, HOME: home, REVIVE_HC: hc, ...extra });
+  const env = (extra = {}) => ({ ...base, HOME: home, USERPROFILE: home, REVIVE_HC: hc, ...extra });
   const run = (args, extra = {}) => spawnSync("node", [ENGINE, ...args], { encoding: "utf8", env: env(extra) });
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
   const labelsOf = (t) => JSON.parse(readFileSync(state, "utf8")).find((x) => x.address === t).labels;
   return { root, home, hc, folder, terminal, transcript, run, calls, labelsOf, env };
 }
 
-test("adopt writes the labels the hook would have, for each running agent nobody recorded", () => {
+test("adopt writes the labels the hook would have, for each running agent nobody recorded", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   const t = w.terminal({ argv: ["claude", "--model", "opus", "--settings", "/s.json", "--dangerously-skip-permissions", "fix it"], cwd: work, session: A, where: "api / main" });
@@ -105,7 +106,7 @@ test("adopt writes the labels the hook would have, for each running agent nobody
   assert.equal(w.calls().length, 1);
 });
 
-test("adopt skips recorded terminals, one-shot runs, unknown sessions and other machines", () => {
+test("adopt skips recorded terminals, one-shot runs, unknown sessions and other machines", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.transcript(A, work);
@@ -132,7 +133,7 @@ test("adopt skips recorded terminals, one-shot runs, unknown sessions and other 
   ].join("\n"), "a recorded terminal, a shell and another machine's terminal say nothing");
 });
 
-test("adopt uses the folder the transcript says the agent started in when it moved", () => {
+test("adopt uses the folder the transcript says the agent started in when it moved", POSIX_HARNESS, () => {
   const w = world();
   const start = w.folder("app");
   const now = w.folder("app/packages/api");
@@ -144,7 +145,7 @@ test("adopt uses the folder the transcript says the agent started in when it mov
   assert.equal(w.labelsOf(t)["revive.cwd"], start);
 });
 
-test("adopt reads the folder from the transcript, not from the name it is filed under", () => {
+test("adopt reads the folder from the transcript, not from the name it is filed under", POSIX_HARNESS, () => {
   const w = world();
   // Both are filed under the same name: …-a-my-proj.
   const start = w.folder("a/my-proj");
@@ -156,7 +157,7 @@ test("adopt reads the folder from the transcript, not from the name it is filed 
   assert.equal(w.labelsOf(t)["revive.cwd"], start);
 });
 
-test("adopt skips a session with no transcript, one that doesn't say its folder, and one whose folder fails the check", () => {
+test("adopt skips a session with no transcript, one that doesn't say its folder, and one whose folder fails the check", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   const open = w.folder("open", 0o777);
@@ -180,7 +181,7 @@ test("adopt skips a session with no transcript, one that doesn't say its folder,
   assert.match(r.stdout, /t4 {2}Claude Code: its folder \S+open is missing, not yours, or writable by others/);
 });
 
-test("one session is adopted into one terminal only", () => {
+test("one session is adopted into one terminal only", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.transcript(A, work);
@@ -196,7 +197,7 @@ test("one session is adopted into one terminal only", () => {
   assert.match(r.stdout, /t4 {2}Claude Code: another terminal holds the same session/);
 });
 
-test("adopt leaves Droid alone even when the dialog finds its session", () => {
+test("adopt leaves Droid alone even when the dialog finds its session", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   const store = join(w.home, ".factory", "sessions", dashed(work));
@@ -213,7 +214,7 @@ test("adopt leaves Droid alone even when the dialog finds its session", () => {
   assert.match(r.stdout, /t1 {2}Droid: only a running Claude Code session can be remembered/);
 });
 
-test("a session found under this process's CLAUDE_CONFIG_DIR records that it needs it, by name", () => {
+test("a session found under this process's CLAUDE_CONFIG_DIR records that it needs it, by name", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   const config = join(w.home, ".claude");
@@ -223,7 +224,7 @@ test("a session found under this process's CLAUDE_CONFIG_DIR records that it nee
   assert.equal(w.labelsOf(t)["revive.needs"], '["CLAUDE_CONFIG_DIR"]');
 });
 
-test("--dry-run prints the labels it would write and writes none", () => {
+test("--dry-run prints the labels it would write and writes none", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.terminal({ argv: ["claude", "--model", "opus"], cwd: work, session: A });
@@ -236,7 +237,7 @@ test("--dry-run prints the labels it would write and writes none", () => {
   assert.match(r.stdout, new RegExp(`revive\\.shell=${SHELL} 'revive\\.since=${since}' revive\\.at=\\d+`));
 });
 
-test("adopt T adopts that terminal only, and says why when it won't", () => {
+test("adopt T adopts that terminal only, and says why when it won't", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.transcript(A, work);
@@ -256,7 +257,7 @@ test("adopt T adopts that terminal only, and says why when it won't", () => {
   assert.deepEqual(w.calls().map((c) => c[0]), ["t2"]);
 });
 
-test("the dialog's list gives a moved session the folder it started in, for Fork", () => {
+test("the dialog's list gives a moved session the folder it started in, for Fork", POSIX_HARNESS, () => {
   const w = world();
   const start = w.folder("app");
   const now = w.folder("app/packages/api");
@@ -267,7 +268,7 @@ test("the dialog's list gives a moved session the folder it started in, for Fork
   assert.equal(entry.rec.cwd, start);
 });
 
-test("the dialog's list says which sessions nobody recorded Remember can record", () => {
+test("the dialog's list says which sessions nobody recorded Remember can record", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.transcript(A, work);
@@ -286,7 +287,7 @@ test("the dialog's list says which sessions nobody recorded Remember can record"
   assert.equal(droid.rememberable, undefined, "only Claude Code's");
 });
 
-test("the dialog's list shows an adopted session as remembered", () => {
+test("the dialog's list shows an adopted session as remembered", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.terminal({ argv: ["claude", "--model", "opus"], cwd: work, session: A });
@@ -303,7 +304,7 @@ test("the dialog's list shows an adopted session as remembered", () => {
 
 // ── install and doctor ──────────────────────────────────────────────────────
 
-test("install says how many running sessions aren't remembered, and remembers none", () => {
+test("install says how many running sessions aren't remembered, and remembers none", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.transcript(A, work);
@@ -327,7 +328,7 @@ test("install says how many running sessions aren't remembered, and remembers no
   assert.doesNotMatch(w.run(["uninstall", "--no-shell"]).stdout, /remember/);
 });
 
-test("doctor says how many running sessions aren't remembered", () => {
+test("doctor says how many running sessions aren't remembered", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.transcript(A, work);
@@ -338,7 +339,7 @@ test("doctor says how many running sessions aren't remembered", () => {
   assert.deepEqual(w.calls(), []);
 });
 
-test("install doesn't ask hc while the terminal's core is down, and installs without hc", () => {
+test("install doesn't ask hc while the terminal's core is down, and installs without hc", POSIX_HARNESS, () => {
   const w = world();
   const work = w.folder("work");
   w.transcript(A, work);

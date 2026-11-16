@@ -297,7 +297,7 @@ export const AGENTS = {
     match: (word) => {
       const name = base(word);
       if (name === "cursor-agent") return true;
-      const dirs = String(word).split("/").slice(0, -1);
+      const dirs = dirsOf(word);
       return ["agent", "node", "index.js"].includes(name) && dirs.some((d) => /^cursor(-agent)?$/i.test(d));
     },
     apps: ["cursor", "cursor-agent"],
@@ -323,7 +323,21 @@ export const AGENTS = {
   },
 };
 
-const base = (path) => String(path ?? "").split("/").pop();
+/**
+ * A program's name from one command-line word: the last part of its path. On
+ * Windows a path uses `\` and a program ends in `.exe` (or is a `.cmd`,
+ * `.bat` or `.ps1` shim, as npm writes): `C:\Users\me\.local\bin\claude.exe`
+ * is `claude`. Windows names don't tell case apart, so a Windows-style word is
+ * compared in lower case.
+ */
+const WIN_EXT = /\.(exe|cmd|bat|com|ps1)$/i;
+const base = (path) => {
+  const word = String(path ?? "");
+  const name = word.split(/[\\/]/).pop();
+  return word.includes("\\") || WIN_EXT.test(name) ? name.replace(WIN_EXT, "").toLowerCase() : name;
+};
+/** The folders of a path, whichever separator it uses. */
+const dirsOf = (path) => String(path ?? "").split(/[\\/]/).slice(0, -1);
 const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
 /** Whether one command-line word is this agent's program. */
@@ -372,7 +386,8 @@ export function hookPayload(payload) {
 }
 
 function payloadAgent(p) {
-  const path = String(p.transcript_path ?? "");
+  // A Windows path (`C:\Users\me\.claude\projects\…`) is read like a POSIX one.
+  const path = String(p.transcript_path ?? "").replace(/\\/g, "/");
   if (path.includes("/.codex/")) return "codex";
   if (path.includes("/.omp/")) return "omp";
   if (path.includes("/.pi/")) return "pi";
@@ -495,9 +510,29 @@ export function hookOwner(table, start, target) {
   return { owned: false, agent: first };
 }
 
-const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "yash", "csh", "tcsh", "nu", "elvish", "xonsh"]);
-/** Whether a command line is a shell's: `zsh`, `-zsh` (a login shell), `/bin/bash --login`. */
-export const isShell = (argv) => SHELLS.has(String(argv?.[0] ?? "").replace(/^-/, "").split("/").pop());
+// pwsh (PowerShell 7), powershell (Windows PowerShell 5.1) and cmd: the shells
+// herdr-core starts on Windows.
+const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "yash", "csh", "tcsh", "nu", "elvish", "xonsh", "pwsh", "powershell", "cmd"]);
+/** Whether a command line is a shell's: `zsh`, `-zsh` (a login shell), `/bin/bash --login`, `C:\…\pwsh.exe`. */
+export const isShell = (argv) => SHELLS.has(base(String(argv?.[0] ?? "").replace(/^-/, "")));
+
+/** Whether a command line is PowerShell's (7 or 5.1). */
+export const isPowerShell = (argv) => ["pwsh", "powershell"].includes(base(argv?.[0]));
+
+/**
+ * Whether a PowerShell or cmd command line waits at its own prompt. herdr-core
+ * starts PowerShell as `pwsh -NoExit -Command <its prompt hook>`: with
+ * -NoExit it is interactive whatever it runs first. Without, a -Command or
+ * -File runs and quits. cmd: `/k` stays, `/c` quits. Parameter names are
+ * case-insensitive and may be shortened (`-noe`, `-c`, `-f`).
+ */
+function windowsPromptShell(argv) {
+  const words = argv.slice(1).map((w) => String(w).toLowerCase());
+  if (base(argv[0]) === "cmd") return !words.some((w) => w === "/c" || w === "/r");
+  const param = (w, name, min) => w.startsWith("-") && w.length - 1 >= min && name.startsWith(w.slice(1));
+  if (words.some((w) => param(w, "noexit", 3))) return true;
+  return !words.some((w) => param(w, "command", 1) || param(w, "file", 1) || param(w, "encodedcommand", 1) || w === "-ec");
+}
 
 /**
  * Whether the shell `shellPid` is the terminal's own: the terminal's program
@@ -529,8 +564,10 @@ export function ownShell(table, shellPid, terminalPid, marker = null) {
  * A shell waiting at its own prompt: no script or `-c` command. One with an
  * operand may be launching an agent.
  */
-export const promptShell = (argv) => isShell(argv) && argv.slice(1).every((w) => String(w).startsWith("-")
-  && (String(w).startsWith("--") ? w !== "--command" : !String(w).slice(1).includes("c")));
+export const promptShell = (argv) => isShell(argv) && (["pwsh", "powershell", "cmd"].includes(base(argv[0]))
+  ? windowsPromptShell(argv)
+  : argv.slice(1).every((w) => String(w).startsWith("-")
+    && (String(w).startsWith("--") ? w !== "--command" : !String(w).slice(1).includes("c"))));
 
 /**
  * Whether a manual Resume may type into the foreground shell `fg` of a
@@ -568,20 +605,24 @@ export function command(rec, kind = "resume", { unattended = false } = {}) {
  * the person; a flag goes right after the agent's name, with a placeholder
  * for its value, which was never recorded.
  */
-export function needsCommand(rec) {
+export function needsCommand(rec, { dialect = "posix" } = {}) {
   const argv = command(rec, "resume");
   if (!argv) return null;
   const added = rec.needs.filter((n) => n.startsWith("-")).map((f) => ` ${f} <folder>`).join("");
+  if (dialectOf(dialect) === "pwsh") {
+    const cd = rec.cwd ? `Set-Location -LiteralPath ${psQuote(rec.cwd)}; ` : "";
+    return `${cd}& ${psQuote(argv[0])}${added}${argv.length > 1 ? ` ${argv.slice(1).map(psQuote).join(" ")}` : ""}`;
+  }
   const cd = rec.cwd ? `cd -- ${shQuote(rec.cwd)} && ` : "";
   return `${cd}${shJoin(argv.slice(0, 1))}${added}${argv.length > 1 ? ` ${shJoin(argv.slice(1))}` : ""}`;
 }
 
 /** What to do by hand for a record with needs, as one sentence ending in the command. */
-export function needsHint(rec) {
+export function needsHint(rec, { dialect = "posix" } = {}) {
   const vars = rec.needs.filter((n) => !n.startsWith("-"));
   const flags = rec.needs.filter((n) => n.startsWith("-"));
   const how = [vars.length ? `set ${vars.join(", ")}` : "", flags.length ? `fill in ${flags.join(", ")}` : ""].filter(Boolean).join(" and ");
-  return `${how[0].toUpperCase()}${how.slice(1)}, then run: ${needsCommand(rec)}`;
+  return `${how[0].toUpperCase()}${how.slice(1)}, then run: ${needsCommand(rec, { dialect })}`;
 }
 
 /**
@@ -608,6 +649,31 @@ export function shQuote(word) {
 }
 
 export const shJoin = (argv) => argv.map(shQuote).join(" ");
+
+/**
+ * One word for PowerShell, quoted only when it needs to be. In a single-quoted
+ * string PowerShell ends the string at `'` and also at the typographic quotes
+ * U+2018–U+201B, so each of them is doubled, as PowerShell's own escaping does.
+ * A bare word must not start what PowerShell reads as an operator (`@` splats,
+ * `$` is a variable, `,` builds an array), hence the short list.
+ */
+export function psQuote(word) {
+  const s = String(word);
+  return /^[A-Za-z0-9_./:=+-]+$/.test(s) && !/^[-+]{0,2}$/.test(s) ? s : `'${s.replace(/['‘’‚‛]/g, "$&$&")}'`;
+}
+
+/**
+ * A PowerShell string literal, always quoted: for text inside an expression
+ * (`'a' + 'b'`), where a bare word is a syntax error, not an argument.
+ */
+export const psString = (text) => `'${String(text).replace(/['‘’‚‛]/g, "$&$&")}'`;
+
+/** A command line PowerShell runs with `&`: the program, then its arguments. */
+export const psJoin = (argv) => `& ${psQuote(argv[0])}${argv.length > 1 ? ` ${argv.slice(1).map(psQuote).join(" ")}` : ""}`;
+
+/** The two shell dialects Revive writes: POSIX sh (zsh, bash) and PowerShell (Windows). */
+export const DIALECTS = ["posix", "pwsh"];
+const dialectOf = (d) => (d === "pwsh" ? "pwsh" : "posix");
 
 /**
  * How the shell's notes are drawn: ANSI's own colors, so they follow the
@@ -751,10 +817,16 @@ export function shouldResume(rec, { pid, since = null, shellPid, env = {} }) {
   return { go: true, why: "the terminal's program was replaced" };
 }
 
-/** `cd -- <folder> && <agent> … --resume <id>`, one line, or "". */
-export function resumeLine(rec, { unattended = false } = {}) {
+/**
+ * `cd -- <folder> && <agent> … --resume <id>`, one line, or "". In PowerShell
+ * (`dialect: "pwsh"`): `Set-Location -LiteralPath <folder>; & <agent> …`. A
+ * PowerShell line carries no REVIVE_RESUME: it has no `VAR=x cmd` form, so
+ * resumeScriptPwsh sets and unsets it around the agent instead.
+ */
+export function resumeLine(rec, { unattended = false, dialect = "posix" } = {}) {
   const argv = command(rec, "resume", { unattended });
   if (!argv) return "";
+  if (dialectOf(dialect) === "pwsh") return `${rec.cwd ? `Set-Location -LiteralPath ${psQuote(rec.cwd)}; ` : ""}${psJoin(argv)}`;
   // Only this agent process inherits the original flags, so its SessionStart
   // (and compaction hooks) won't erase the flags omitted from its argv. A
   // later manual launch has its own environment and records its own flags.
@@ -806,6 +878,152 @@ export function resumeScript(rec, engine) {
     `}; fi`,
     `unset __revive_tty`,
   ].join("\n");
+}
+
+/**
+ * PowerShell's `printfLine`: one line of styled parts, each `[style, text]`.
+ * The texts are single-quoted strings, joined with the escape character
+ * built at run time (`[char]27`; Windows PowerShell 5.1 has no `` `e ``).
+ */
+const PS_SGR = { accent: "[1;34m", warn: "[1;33m", caution: "[33m", strong: "[1m", dim: "[2m" };
+export function psLine(parts) {
+  const pieces = parts.map(([style, text]) => (style
+    ? `$__revive_e + ${psString(PS_SGR[style])} + ${psString(text)} + $__revive_e + '[0m'`
+    : psString(text)));
+  return `[Console]::Out.WriteLine(${pieces.join(" + ") || "''"})`;
+}
+
+/**
+ * A Windows console writes in its code page (437, 850, …), where `↻` and `·`
+ * become `?`: Revive's notes are written as UTF-8, and the console's own
+ * encoding is put back before the agent starts. Setting it fails without a
+ * console (output to a pipe), which is fine: then there is no code page to fix.
+ */
+const PS_UTF8_ON = [
+  "  $__revive_e = [string][char]27",
+  "  $__revive_oe = [Console]::OutputEncoding",
+  "  try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}",
+];
+const PS_UTF8_OFF = "try { [Console]::OutputEncoding = $__revive_oe } catch {}";
+
+/** What `check` prints for a session it won't resume by itself, in either dialect. */
+export function notResumingLine(rec, why, { dialect = "posix" } = {}) {
+  const parts = [
+    ["warn", "↻ Revive"], [null, `  not resuming ${AGENTS[rec.agent].name} session ${shortId(rec.session)}: ${why}.`],
+    ["dim", " Resume it by hand from the Revive dialog."],
+  ];
+  return dialectOf(dialect) === "pwsh" ? ["& {", ...PS_UTF8_ON, `  ${psLine(parts)}`, `  ${PS_UTF8_OFF}`, "}"].join("\n") : printfLine(parts);
+}
+
+/**
+ * resumeScript for PowerShell (pwsh 7 and Windows PowerShell 5.1), run by
+ * Revive's block in the profile. Same steps: the note, the folder, the agent
+ * with the flags an automatic resume keeps, and `failed` when the agent quits
+ * with an error within 15 seconds. REVIVE_RESUME is set for the agent's process
+ * only, and taken away again when it ends. There is no /dev/tty to hand over:
+ * on Windows the console is the shell's while its profile runs, and the agent
+ * inherits it. Everything runs in a script block, so its variables don't stay
+ * in the person's session; a folder that can't be entered stops it before
+ * the agent starts.
+ */
+export function resumeScriptPwsh(rec, engine) {
+  const argv = command(rec, "resume", { unattended: true });
+  if (!argv) return "";
+  const name = AGENTS[rec.agent].name;
+  const { dropped } = attendedFlags(rec.agent, safeFlags(rec.agent, rec.flags ?? []));
+  const notes = [psLine([
+    ["accent", "↻ Revive"], [null, "  resuming "], ["strong", name], [null, ` session ${shortId(rec.session)}`],
+    ["dim", " · $env:REVIVE_AUTO = 0 skips this"],
+  ])];
+  if (dropped.length) {
+    notes.push(psLine([["caution", `  without ${dropped.join(", ")} (only a resume from the Revive dialog keeps ${dropped.length > 1 ? "them" : "it"})`]]));
+  }
+  const context = JSON.stringify({ agent: rec.agent, session: rec.session, flags: safeFlags(rec.agent, rec.flags ?? []) });
+  return [
+    "& {",
+    ...PS_UTF8_ON,
+    ...notes.map((n) => `  ${n}`),
+    // A folder that is gone since `check` vetted it: say so and leave this block, not the shell.
+    ...(rec.cwd ? [
+      `  try { Set-Location -LiteralPath ${psQuote(rec.cwd)} -ErrorAction Stop }`,
+      `  catch { ${psLine([["warn", "↻ Revive"], [null, `  not resuming ${name} session ${shortId(rec.session)}: its folder is gone.`]])}; ${PS_UTF8_OFF}; return }`,
+    ] : []),
+    `  ${PS_UTF8_OFF}`,
+    `  $env:REVIVE_RESUME = ${psString(context)}`,
+    "  $__revive_t = [DateTime]::UtcNow",
+    "  $global:LASTEXITCODE = 0",
+    "  try {",
+    `    ${psJoin(argv)}`,
+    "    $__revive_ok = $? -and $LASTEXITCODE -eq 0",
+    "  } catch { $__revive_ok = $false }",
+    "  Remove-Item Env:REVIVE_RESUME -ErrorAction SilentlyContinue",
+    "  if (-not $__revive_ok -and ([DateTime]::UtcNow - $__revive_t).TotalSeconds -lt 15) {",
+    `    & node ${psQuote(engine)} failed`,
+    "  }",
+    "}",
+  ].join("\n");
+}
+
+/**
+ * A Windows command line split into words the way programs read it
+ * (CommandLineToArgvW and the C runtime): spaces separate words outside double
+ * quotes; 2n backslashes before a quote are n backslashes and the quote opens
+ * or closes; 2n+1 are n backslashes and a literal quote; other backslashes are
+ * themselves; `""` inside quotes is a literal quote.
+ */
+export function splitCommandLine(line) {
+  const s = String(line ?? "");
+  const out = [];
+  let word = "", inWord = false, quoted = false;
+  for (let i = 0; i < s.length;) {
+    const c = s[i];
+    if (c === "\\") {
+      let n = 0;
+      while (s[i] === "\\") { n++; i++; }
+      inWord = true;
+      if (s[i] === '"') {
+        word += "\\".repeat(n >> 1);
+        // An odd count escapes the quote; an even one leaves it to open or close.
+        if (n % 2) { word += '"'; i++; }
+      } else word += "\\".repeat(n);
+      continue;
+    }
+    if (c === '"') {
+      if (quoted && s[i + 1] === '"') { word += '"'; i += 2; }
+      else { quoted = !quoted; i++; }
+      inWord = true;
+      continue;
+    }
+    if ((c === " " || c === "\t") && !quoted) {
+      if (inWord) { out.push(word); word = ""; inWord = false; }
+      i++;
+      continue;
+    }
+    word += c;
+    inWord = true;
+    i++;
+  }
+  if (inWord) out.push(word);
+  return out;
+}
+
+/**
+ * Windows' process table, as the engine reads it from Win32_Process (see
+ * `processes` in revive.mjs), in the same shape as parseProcesses: pid →
+ * { ppid, since, argv }. `since` is the creation time in ISO form, which tells a
+ * new process from an old one that had the same pid before a reboot. Takes the
+ * JSON array (or the one object PowerShell prints for a single process).
+ */
+export function parseWinProcesses(text) {
+  const table = new Map();
+  let rows;
+  try { rows = JSON.parse(String(text ?? "").trim() || "[]"); } catch { return table; }
+  for (const row of Array.isArray(rows) ? rows : [rows]) {
+    const pid = Number(row?.p);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    table.set(pid, { ppid: Number(row.pp) || 0, since: typeof row.s === "string" && row.s ? row.s : null, argv: splitCommandLine(row.c ?? "") });
+  }
+  return table;
 }
 
 /** "3m ago", for a timestamp in ms. */

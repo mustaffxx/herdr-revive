@@ -20,16 +20,16 @@ const home = () => mkdtempSync(join(tmpdir(), "revive-sessions-"));
 
 test("store folders follow HOME and the agents' own variables", () => {
   const dirs = agentDirs({ HOME: "/h" });
-  assert.equal(dirs.claude, "/h/.claude");
-  assert.equal(dirs.factory, "/h/.factory");
-  assert.equal(dirs.cursor, "/h/.cursor");
+  assert.equal(dirs.claude, join("/h", ".claude"));
+  assert.equal(dirs.factory, join("/h", ".factory"));
+  assert.equal(dirs.cursor, join("/h", ".cursor"));
   assert.equal(agentDirs({ HOME: "/h", CLAUDE_CONFIG_DIR: "/c" }).claude, "/c");
 });
 
 test("each agent's per-folder store is named after the folder", () => {
   const dirs = agentDirs({ HOME: "/h" });
-  assert.equal(sessionDir("droid", dirs, CWD), "/h/.factory/sessions/-Users-me-code-my-app");
-  assert.equal(sessionDir("cursor", dirs, CWD), `/h/.cursor/chats/${createHash("md5").update(CWD).digest("hex")}`);
+  assert.equal(sessionDir("droid", dirs, CWD), join("/h", ".factory", "sessions", "-Users-me-code-my-app"));
+  assert.equal(sessionDir("cursor", dirs, CWD), join("/h", ".cursor", "chats", createHash("md5").update(CWD).digest("hex")));
   assert.equal(sessionDir("codex", dirs, CWD), null);
 });
 

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentKey, carriedFlags, command, hookPayload, isOneShot, readRecord, canFork, needsOf, shouldResume } from "../mods/revive/lib/core.js";
 import { vetRecord } from "../mods/revive/revive.mjs";
+import { POSIX_HARNESS } from "./helpers/platform.js";
 
 const ID = "0190f3a2-7c41-7b5e-9d2a-3e6f1c8b4a17";
 const FILE = `/h/.omp/agent/sessions/-w/2026-01-01T00-00-00-000Z_${ID}.jsonl`;
@@ -154,7 +155,7 @@ test("a config variable need is met only by the shell's own setting", () => {
   assert.equal(shouldResume(rec, { pid: 1, shellPid: 1, env: {} }).hint, undefined);
 });
 
-test("the folder a record names is used only as the person's own, real folder", () => {
+test("the folder a record names is used only as the person's own, real folder", POSIX_HARNESS, () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "revive-cwd-")));
   const work = join(root, "work");
   mkdirSync(work);
