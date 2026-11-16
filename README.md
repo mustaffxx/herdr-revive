@@ -29,7 +29,8 @@ Works with **Claude Code**, **Codex**, **Cursor**, **Droid**, **pi** and **omp**
 
 - The **Herdr desktop app 0.1.9+**
 - **Node 20+**
-- **zsh** or **bash** (other shells: see [Limits](#limits))
+- **zsh** or **bash**; on Windows, **PowerShell 7** (`pwsh`) or **Windows PowerShell 5.1**
+  (other shells: see [Limits](#limits))
 - At least one supported agent:
 
 | Agent | Status | Resumes with | Forks with | Recorded by |
@@ -135,6 +136,11 @@ group is your own private one (as with a Linux umask of 002). Otherwise the sess
 resumed at all, not even by hand, since the agent would start in another folder with its
 flags. The dialog says which folder failed.
 
+On Windows, file modes say nothing, so the folder's ACL decides: its owner must be you, the
+Administrators group or SYSTEM, and neither Everyone nor Anonymous Logon may write to it.
+Other users' write access is not refused, since Windows gives Authenticated Users Modify on
+every folder made outside your profile (`C:\code`, `D:\work`), where most code lives.
+
 ## Install
 
 In Herdr, ask your agent to add `github.com/dmazlum/herdr-revive`: it reads
@@ -148,11 +154,21 @@ herdr-app check ~/.config/herdr-app/mods/revive
 node ~/.config/herdr-app/mods/revive/revive.mjs install
 ```
 
+On Windows, in PowerShell:
+
+```powershell
+git clone https://github.com/dmazlum/herdr-revive
+Copy-Item -Recurse herdr-revive\mods\revive ~\.config\herdr-app\mods\
+herdr-app check ~\.config\herdr-app\mods\revive
+node ~\.config\herdr-app\mods\revive\revive.mjs install
+```
+
 Then merge [`keys.json`](keys.json) into `~/.config/herdr-app/keys.json`:
 
 | Key | What it does |
 | --- | --- |
 | `cmd-shift-r` → `mod.open:revive` | Open the dialog for the focused terminal |
+| `ctrl-shift-r` → `mod.open:revive` | The same, on Windows and Linux |
 | `F` / `D` / `T` in the dialog | Fork the focused agent right / below / to a new tab |
 | `↵` in the dialog | Resume the focused terminal's session |
 | `R` | Refresh |
@@ -173,8 +189,8 @@ Each agent is set up only when it looks installed:
 | --- | --- |
 | Claude Code | `SessionStart` and `SessionEnd` hooks in `~/.claude/settings.json`. The hook names the engine as `"$HOME/…"` when it is under your home folder, so a `settings.json` synced between machines finds it on each. |
 | Codex | The same two hooks in `~/.codex/hooks.json`. Codex asks you to trust them the next time it starts. |
-| pi | A link from `~/.pi/agent/extensions/herdr-revive.ts` to `mods/revive/pi/revive.ts`. pi loads it the next time it starts, or at `/reload`. |
-| omp | A link from `~/.omp/agent/extensions/herdr-revive.ts` to `mods/revive/omp/revive.ts`. omp loads it the next time it starts. |
+| pi | A link from `~/.pi/agent/extensions/herdr-revive.ts` to `mods/revive/pi/revive.ts`. pi loads it the next time it starts, or at `/reload`. On Windows, where a link needs administrator rights, a two-line file that loads `mods/revive/pi/revive.ts` instead. |
+| omp | A link from `~/.omp/agent/extensions/herdr-revive.ts` to `mods/revive/omp/revive.ts` (on Windows, the same two-line file). omp loads it the next time it starts. |
 | Droid | The two hooks in `~/.factory/hooks.json` if you have one, else in the `hooks` key of `~/.factory/settings.json` (Droid reads that one only while there is no `hooks.json`). Droid warns that its hooks changed and shows them in `/hooks`. |
 | Cursor | `sessionStart` and `sessionEnd` in `~/.cursor/hooks.json`. A `~/.cursor` folder alone doesn't count as installed, since the Cursor editor makes one and reads that `hooks.json` too. |
 
@@ -194,6 +210,13 @@ It also adds a short block to the file your shell reads at start:
 - **bash on Linux:** `~/.bashrc`, since herdr-core starts bash there without `-l`
   ([herdr-core#99](https://github.com/herdrdev/herdr-core/issues/99)). Only one bash file
   keeps the block: one an earlier version put in a login file is taken out.
+- **PowerShell on Windows:** the profile PowerShell names as
+  `$PROFILE.CurrentUserCurrentHost`, for `pwsh` when it is installed, else for Windows
+  PowerShell (`--pwsh`, `--powershell` or both pick). A new Windows PowerShell 5.1 profile
+  whose block names a non-ASCII path gets a byte-order mark, since 5.1 reads a file without
+  one as the ANSI code page; an existing file keeps the one it has or hasn't. If the
+  execution policy is `Restricted` or `AllSigned`, PowerShell won't run the profile at all:
+  `install` says so and how to allow it, and doesn't change the policy.
 
 How it treats your files:
 
@@ -211,6 +234,7 @@ How it treats your files:
 
 ```sh
 node ~/.config/herdr-app/mods/revive/revive.mjs install --zsh --bash   # both shells
+node ~/.config/herdr-app/mods/revive/revive.mjs install --pwsh --powershell   # Windows: both PowerShells
 node ~/.config/herdr-app/mods/revive/revive.mjs install --no-pi        # skip an agent: --no-codex, --no-pi, --no-omp, --no-droid, --no-cursor
 node ~/.config/herdr-app/mods/revive/revive.mjs adopt --dry-run        # what adopt would remember of the Claude Code sessions already running
 node ~/.config/herdr-app/mods/revive/revive.mjs adopt                  # remember them
@@ -306,8 +330,8 @@ REVIVE_DEBUG=1 zsh               # say why a shell did or didn't resume
   Droid's and Cursor's newest file is a guess, good enough to show but not to keep.
 - An agent that died while its shell lived on is not resumed automatically, since nothing
   told the shell. Use **Resume** in the dialog.
-- Shells: zsh and bash. Other shells can run `revive.mjs check --shell $$` from their own
-  rc file and evaluate what it prints.
+- Shells: zsh and bash, and PowerShell on Windows. Other shells can run
+  `revive.mjs check --shell $$` from their own rc file and evaluate what it prints.
 
 ### Codex
 
@@ -374,11 +398,34 @@ flags, `--session`/`--fork` or how it ends on a signal.
   Cursor to Herdr. Cursor's hooks also run for the Cursor editor's chats; outside a Herdr
   terminal they do nothing.
 
+### Windows
+
+Checked by hand on Windows 11 with herdr-app 0.1.16, herdr-core 0.1.21, Node 24, PowerShell
+7.6 and Windows PowerShell 5.1: Claude Code 2.1.325 and pi 1.4.0 are recorded, forgotten on
+`/exit`, and come back with their conversation after a core restart and after a real reboot.
+Codex, omp, Droid and Cursor are covered by unit tests only.
+
+- The shell is PowerShell, the one herdr-core starts there. A Herdr shell set to Git Bash,
+  `cmd` or WSL gets no block.
+- There is no `ps`: the process table comes from `Get-CimInstance Win32_Process`, through one
+  PowerShell call per hook or dialog refresh (about half a second).
+- Claude Code runs its hooks through Git Bash, so the hook's chain is
+  `node ← bash ← bash ← claude.exe ← pwsh`; the bash steps are passed over like any wrapper.
+  Its hook command names the engine by its absolute path.
+- pi's and omp's extension is a two-line file that loads Revive's, not a link (see
+  [What `install` changes](#what-install-changes)).
+- Herdr may still show a killed agent as the terminal's program for up to a second; the
+  dialog checks the process table and treats it as gone.
+
 ## Development
 
 ```sh
 npm test    # labels, states, flags, quoting, the resume script, install and uninstall
 ```
+
+On Windows, `npm test` also runs `test/windows.test.js` (the PowerShell block and resume
+script, in `pwsh` and in Windows PowerShell 5.1) and skips the tests that drive a POSIX
+shell or `ps`.
 
 The UI is checked in Herdr: `herdr-app check`, then `herdr-app shot` while the dialog is
 open. To test a real restart without touching your own terminals, start a second

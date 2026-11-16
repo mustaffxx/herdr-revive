@@ -12,7 +12,7 @@ Cursor are built from their docs and not tested end to end yet.
 2. Copy `mods/revive` to `~/.config/herdr-app/mods/revive`.
 3. Run `herdr-app check ~/.config/herdr-app/mods/revive`. It must pass.
 4. Merge `keys.json` into `~/.config/herdr-app/keys.json`. Ask the person first if
-   `cmd-shift-r` is already bound.
+   `cmd-shift-r` (macOS) or `ctrl-shift-r` (Windows, Linux) is already bound.
 5. Tell the person what `install` changes and ask before running it:
    `node ~/.config/herdr-app/mods/revive/revive.mjs install`. It edits
    `~/.claude/settings.json` (only if `~/.claude` exists), `~/.codex/hooks.json` (only if `~/.codex` exists), Droid's
@@ -29,7 +29,12 @@ Cursor are built from their docs and not tested end to end yet.
    (a Linux login file, from an earlier version) is taken out. If they use both zsh and bash, add
    `--zsh --bash`; `--no-codex`, `--no-pi`, `--no-omp`, `--no-droid`, `--no-cursor` skip
    an agent. pi loads its extension the next time it starts or at `/reload`, omp only
-   the next time it starts.
+   the next time it starts. On Windows the shell file is PowerShell's
+   `$PROFILE.CurrentUserCurrentHost`, for `pwsh` if it is installed, else for Windows
+   PowerShell (`--pwsh --powershell` for both), and pi's and omp's extension is a
+   two-line file that loads Revive's, not a link (a link needs administrator rights).
+   If `install` warns that the execution policy keeps PowerShell from running the
+   profile, tell the person; don't change the policy yourself.
 6. Run `node ~/.config/herdr-app/mods/revive/revive.mjs doctor` and report what it shows.
 7. New sessions are remembered from now on. Sessions already running are not: `install`
    and `doctor` (`unremembered`) say how many Claude Code ones `adopt` could remember.
@@ -163,7 +168,9 @@ latest release* when a newer release is out. To do it:
   approvals or the sandbox were left out, a second line in yellow: `  without
   --dangerously-skip-permissions (only a resume from the Revive dialog keeps it)`.
   Both are `printfLine` (`lib/core.js`): the texts are `printf` arguments, never its
-  format.
+  format. In PowerShell they are `psLine`: each text a single-quoted string, written
+  with `[Console]::Out.WriteLine` while the console's output encoding is UTF-8 (so `↻`
+  shows), then the encoding is put back.
 
 ## The files
 
@@ -194,7 +201,7 @@ A session is remembered as labels on its herdr-core terminal:
 | `revive.needs` | What the session ran with that Revive doesn't carry, as a JSON array of names, never values: the agent's config-folder variables that were set (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`) and `--session-dir` (pi, omp); absent otherwise |
 | `revive.transcript` | pi and omp only: the session file the agent named |
 | `revive.shell` | The pid of the terminal's program when the session started or was resumed |
-| `revive.since` | That program's start time (`ps -o lstart`), so a new shell that got an old pid after a reboot is still new |
+| `revive.since` | That program's start time (`ps -o lstart`; on Windows `Win32_Process.CreationDate`), so a new shell that got an old pid after a reboot is still new |
 | `revive.at` | When it was recorded (ms) |
 | `revive.resumed` | When Revive last resumed it (ms); kept until a new session starts |
 | `revive.failed` | When a resume gave up within 15 seconds (ms) |
@@ -443,6 +450,49 @@ reboot with either agent.
   `herdr` module rather than imported by name, so an older Herdr, which has no such
   export, still loads the mod.
 
+### Windows
+
+- The process table is `Get-CimInstance Win32_Process` (pid, parent, `CreationDate` in
+  UTC, command line), from one PowerShell call (`pwsh` if installed, else
+  `powershell`; `-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand`,
+  15 second limit). Command lines are split by `CommandLineToArgvW`'s rules
+  (`splitCommandLine`). Program names are compared without their folder, case or
+  `.exe`/`.cmd`/`.bat`/`.com`/`.ps1`, but only for a Windows path or one with such an
+  extension: a POSIX name keeps its case.
+- `pwsh`, `powershell` and `cmd` are shells. Claude Code runs its hooks through Git
+  Bash, so the walk from a hook passes `bash` twice before `claude.exe`; that is a wrapper,
+  not agent, shell, agent.
+- The folder check: the folder must exist and its ACL (`Get-Acl`) must name as owner this
+  user, Administrators (`S-1-5-32-544`) or SYSTEM (`S-1-5-18`), with no Allow rule giving
+  Everyone (`S-1-1-0`) or Anonymous Logon (`S-1-5-7`) the right to write, append, change
+  permissions or take ownership (mask `0x500C0006`, generic write and full control
+  included). Authenticated Users with Modify is not refused: Windows gives it on every folder
+  made outside the profile. One PowerShell call answers for every folder a `list` needs.
+- The shell block (`pwshBlock`) is ASCII only, so Windows PowerShell 5.1 reads it in any
+  code page, and runs in both PowerShells. It does what the zsh and bash blocks do: one
+  `hc get`, the `REVIVE_SHELL` parent check (through `Win32_Process`), then `check --shell
+  $PID --dialect pwsh`, read as UTF-8 and run with `Invoke-Expression`, inside
+  `try`/`catch` so a broken check never breaks the shell. It runs at once, not at the
+  first prompt: PowerShell has no prompt theme that holds output while it starts, and the
+  profile is the last thing before the prompt.
+- `check --dialect pwsh` prints a script block: the notes, `Set-Location -LiteralPath`
+  (a missing folder prints *not resuming … its folder is gone.* and stops), `REVIVE_RESUME`
+  set while the agent runs, then `& <agent> <flags>` and the 15-second failure mark through
+  `& node <engine> failed`. Every word is a single-quoted PowerShell string (`psQuote`), with
+  `'` and the curly quotes `‘ ’ ‚ ‛` doubled, since PowerShell takes those as quotes too.
+- The dialog's **Resume** sends the PowerShell form when the terminal's shell is
+  PowerShell (`Set-Location -LiteralPath '…'; & agent …`), and **Copy command** gives it
+  on Windows.
+- A foreground pid Herdr still reports but the process table no longer has is gone:
+  Herdr can lag a second behind a killed agent.
+- Install writes the profile for the PowerShell asked (`$PROFILE.CurrentUserCurrentHost`,
+  asked of that PowerShell, since Documents may be redirected). A byte-order mark is kept
+  as it was; a new Windows PowerShell 5.1 profile with non-ASCII text gets one. `doctor`
+  reports `executionPolicy`, and install warns when it is `Restricted` or `AllSigned`.
+- pi's and omp's extension is a file with a marker comment and `export { default } from
+  "<file URL of mods/revive/pi/revive.ts>"`, so `../lib/extension.js` is still found from
+  the real path. Uninstall removes it only when its content is exactly that.
+
 ## Update check
 
 - Only the dialog checks, when it opens, and at most once a day: one GET to
@@ -474,6 +524,8 @@ reboot with either agent.
 | `REVIVE_DEBUG=1` | The shell block says why it did or didn't resume, on stderr |
 | `REVIVE_HC` | The `hc` binary the engine and the shell block use (default: `hc` on PATH) |
 | `REVIVE_TTY` | The device the resume runs on, instead of the terminal's (for tests) |
+| `REVIVE_PS` | Windows: the PowerShell the engine runs its queries with (default: `pwsh` if on PATH, else `powershell`) |
+| `REVIVE_PWSH_PROFILE`, `REVIVE_POWERSHELL_PROFILE` | Windows: the profile install writes for each PowerShell, instead of the one it names (for tests: a PowerShell finds Documents from Windows, not from `USERPROFILE`) |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR`, `ZDOTDIR` | Honored when finding the files to install into; a session's own `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` is recorded by name only, as a need. Without `ZDOTDIR` in the environment, `zsh -c` is asked for it (it reads `~/.zshenv`). omp, Droid and Cursor: always `~/.omp/agent`, `~/.factory` and `~/.cursor` |
 
 Install writes through symlinks to the file they point at, keeps each file's permissions,
