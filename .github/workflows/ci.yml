@@ -20,8 +20,13 @@ jobs:
       fail-fast: false
       matrix:
         # macOS too: the mod runs there, with zsh by default and a symlinked /tmp.
-        os: [ubuntu-latest]
+        # Windows: the PowerShell block and resume script run in pwsh and in Windows PowerShell 5.1.
+        os: [ubuntu-latest, windows-latest]
         node: [20, 22]
+    defaults:
+      run:
+        # Git Bash on Windows, so every step reads the same on both.
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -32,4 +37,6 @@ jobs:
       - name: Mod manifest and keys are JSON
         run: node -e "for (const f of ['mods/revive/mod.json', 'mods/revive/package.json', 'keys.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
       - name: Test
-        run: npm test
+        # npm test's command, with the glob expanded by bash: npm runs scripts with cmd on
+        # Windows, which leaves it as is, and Node 20's --test doesn't expand it either.
+        run: node --test test/*.test.js
