@@ -1,5 +1,6 @@
 {
   "global": {
-    "cmd-shift-r": "mod.open:revive"
+    "cmd-shift-r": "mod.open:revive",
+    "ctrl-shift-r": "mod.open:revive"
   }
 }
