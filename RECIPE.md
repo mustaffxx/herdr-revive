@@ -13,7 +13,9 @@ real reboot yet.
 2. Copy `mods/revive` to `~/.config/herdr-app/mods/revive`.
 3. Run `herdr-app check ~/.config/herdr-app/mods/revive`. It must pass.
 4. Merge `keys.json` into `~/.config/herdr-app/keys.json`. Ask the person first if
-   `cmd-shift-r` (macOS) or `ctrl-shift-r` (Windows, Linux) is already bound.
+   `cmd-shift-r` is already bound. On Windows and Linux, `keys.json` gives no key (there
+   is no `cmd`): tell the person they can add `"ctrl-shift-r": "mod.open:revive"` under
+   `global` themselves, and that a global key is taken from every terminal program.
 5. Tell the person what `install` changes and ask before running it:
    `node ~/.config/herdr-app/mods/revive/revive.mjs install`. It edits
    `~/.claude/settings.json` (only if `~/.claude` exists), `~/.codex/hooks.json` (only if `~/.codex` exists), Droid's
@@ -496,7 +498,9 @@ record and resumed the session.
   Everyone (`S-1-1-0`) or Anonymous Logon (`S-1-5-7`) the right to write, append, change
   permissions or take ownership (mask `0x500C0006`, generic write and full control
   included). Authenticated Users with Modify is not refused: Windows gives it on every folder
-  made outside the profile. One PowerShell call answers for every folder a `list` needs.
+  made outside the profile. That is looser than the POSIX rule (other people who sign in to
+  the machine can change such a folder's files), and the README says so. One PowerShell
+  call answers for every folder a `list` needs.
 - The shell block (`pwshBlock`) is ASCII only, so Windows PowerShell 5.1 reads it in any
   code page, and runs in both PowerShells. It does what the zsh and bash blocks do: one
   `hc get`, the `REVIVE_SHELL` parent check (through `Win32_Process`), then `check --shell
@@ -509,6 +513,13 @@ record and resumed the session.
   set while the agent runs, then `& <agent> <flags>` and the 15-second failure mark through
   `& node <engine> failed`. Every word is a single-quoted PowerShell string (`psQuote`), with
   `'` and the curly quotes `‘ ’ ‚ ‛` doubled, since PowerShell takes those as quotes too.
+  Only plain words stay bare, and a word that starts with `-` only when it is a flag name
+  (`--model`, `-m`): both PowerShells pass `-m.x`, `-Dfoo.bar=1` or `-v1.2` to a native
+  program split at the `.`.
+- Copilot CLI runs an entry's `powershell` command on Windows and never its `bash` one
+  (checked with copilot 1.0.112), so install writes both there: `node '<engine>' hook --agent
+  copilot`, the engine single-quoted. The `settle` process a `user_exit` starts is spawned
+  with `windowsHide`, so no console window opens at `/exit`.
 - The dialog's **Resume** sends the PowerShell form when the terminal's shell is
   PowerShell (`Set-Location -LiteralPath '…'; & agent …`), and **Copy command** gives it
   on Windows.

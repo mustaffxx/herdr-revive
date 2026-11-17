@@ -143,7 +143,11 @@ flags. The dialog says which folder failed.
 On Windows, file modes say nothing, so the folder's ACL decides: its owner must be you, the
 Administrators group or SYSTEM, and neither Everyone nor Anonymous Logon may write to it.
 Other users' write access is not refused, since Windows gives Authenticated Users Modify on
-every folder made outside your profile (`C:\code`, `D:\work`), where most code lives.
+every folder made outside your profile (`C:\code`, `D:\work`), where most code lives. This is
+looser than "nobody else can write to it" on macOS and Linux: on a machine other people sign
+in to, they could change the files in such a folder, and a resumed agent would start there.
+If that matters, keep your projects under your profile, or take away Authenticated Users'
+write access to the folder.
 
 ## Install
 
@@ -172,11 +176,14 @@ Then merge [`keys.json`](keys.json) into `~/.config/herdr-app/keys.json`:
 | Key | What it does |
 | --- | --- |
 | `cmd-shift-r` → `mod.open:revive` | Open the dialog for the focused terminal |
-| `ctrl-shift-r` → `mod.open:revive` | The same, on Windows and Linux |
 | `F` / `D` / `T` in the dialog | Fork the focused agent right / below / to a new tab |
 | `↵` in the dialog | Resume the focused terminal's session |
 | `R` | Refresh |
 | Esc | Close |
+
+On Windows and Linux there is no `cmd` key. To open the dialog from the keyboard there, add
+`"ctrl-shift-r": "mod.open:revive"` under `"global"` yourself. It isn't in `keys.json`
+because a global binding takes the key from every program running in a terminal.
 
 ### What `install` changes
 
@@ -199,7 +206,7 @@ Each agent is set up only when it looks installed:
 | omp | A link from `~/.omp/agent/extensions/herdr-revive.ts` to `mods/revive/omp/revive.ts` (on Windows, the same two-line file). omp loads it the next time it starts. |
 | Droid | The two hooks in `~/.factory/hooks.json` if you have one, else in the `hooks` key of `~/.factory/settings.json` (Droid reads that one only while there is no `hooks.json`). Droid warns that its hooks changed and shows them in `/hooks`. |
 | Cursor | `sessionStart` and `sessionEnd` in `~/.cursor/hooks.json`. A `~/.cursor` folder alone doesn't count as installed, since the Cursor editor makes one and reads that `hooks.json` too. |
-| Copilot CLI | `SessionStart` and `SessionEnd` in a file of its own, `~/.copilot/hooks/herdr-revive.json` (Copilot reads every `*.json` there); `uninstall` deletes it. A `~/.copilot` folder alone doesn't count as installed, since the Copilot app and editors make one too. |
+| Copilot CLI | `SessionStart` and `SessionEnd` in a file of its own, `~/.copilot/hooks/herdr-revive.json` (Copilot reads every `*.json` there); `uninstall` deletes it. A `~/.copilot` folder alone doesn't count as installed, since the Copilot app and editors make one too. On Windows each entry also has a `powershell` command, the one Copilot runs there. |
 
 Droid's, Cursor's and Copilot CLI's hooks run `revive.mjs hook --agent droid|cursor|copilot`.
 
@@ -446,7 +453,9 @@ flags, `--session`/`--fork` or how it ends on a signal.
 Checked by hand on Windows 11 with herdr-app 0.1.16, herdr-core 0.1.21, Node 24, PowerShell
 7.6 and Windows PowerShell 5.1: Claude Code 2.1.325 and pi 1.4.0 are recorded, forgotten on
 `/exit`, and come back with their conversation after a core restart and after a real reboot.
-Codex, omp, Droid and Cursor are covered by unit tests only.
+Copilot CLI 1.0.80 (winget's `copilot.exe`) and 1.0.112 (npm's, through its node loader)
+were checked the same way after a core restart, not yet after a real reboot. Codex, omp,
+Droid and Cursor are covered by unit tests only.
 
 - The shell is PowerShell, the one herdr-core starts there. A Herdr shell set to Git Bash,
   `cmd` or WSL gets no block.
@@ -455,6 +464,8 @@ Codex, omp, Droid and Cursor are covered by unit tests only.
 - Claude Code runs its hooks through Git Bash, so the hook's chain is
   `node ← bash ← bash ← claude.exe ← pwsh`; the bash steps are passed over like any wrapper.
   Its hook command names the engine by its absolute path.
+- Copilot CLI runs a hook's `powershell` command on Windows and ignores its `bash` one, so
+  Revive's entries have both. The process that settles a `user_exit` runs without a window.
 - pi's and omp's extension is a two-line file that loads Revive's, not a link (see
   [What `install` changes](#what-install-changes)).
 - Herdr may still show a killed agent as the terminal's program for up to a second; the
